@@ -25,9 +25,9 @@ if not os.path.exists(CAPITAL_FILE):
 VIX_RULE_FILE = 'vix_rules.csv'
 if not os.path.exists(VIX_RULE_FILE):
     pd.DataFrame([
-        {"Threshold": 20.0, "Action": "暫停加碼，檢查維持率"},
-        {"Threshold": 30.0, "Action": "觸發恐慌：準備現金，若跌破支撐執行減碼"},
-        {"Threshold": 40.0, "Action": "極度恐慌：優先保命，變現還款提升維持率至 160%"}
+        {"Threshold": 30.0, "Action": "20%買QQQ/938"},
+        {"Threshold": 40.0, "Action": "40%買9815/52"},
+        {"Threshold": 60.0, "Action": "全轉QLD"}
     ]).to_csv(VIX_RULE_FILE, index=False)
 
 # --- A. 側邊介面 ---
@@ -50,11 +50,11 @@ with st.sidebar:
     maint_alert_val = st.number_input("維持率警戒線 (%)", value=140)
 
 # --- 功能分頁 ---
-tab1, tab2, tab3, tab4 = st.tabs(["早安決策", "維持率監控", "交易紀錄(管理)", "資產績效(手動)"])
+tab1, tab2, tab3, tab4 = st.tabs(["今日動作", "維持率監控", "交易紀錄", "資產績效"])
 
 # === B. 早安決策介面 ===
 with tab1:
-    st.header("🌅 晨間操作指引")
+    st.header("🌅 今日動作")
     col_k1, col_k2 = st.columns(2)
     try:
         vix = yf.Ticker("^VIX")
@@ -98,11 +98,11 @@ with tab1:
 with tab2:
     st.header("📊 質押與市值監控")
     
-    loan_input = st.number_input("目前總質押借款金額 (TWD)", value=1000000, step=10000)
+    loan_input = st.number_input("目前總質押借款金額 (TWD)", value=0, step=1000)
     st.session_state['total_loan_amount'] = loan_input
     
     if 'portfolio_df' not in st.session_state:
-        st.session_state['portfolio_df'] = pd.DataFrame([{"Ticker": "00981.TW", "Units": 10000}, {"Ticker": "0050.TW", "Units": 0}])
+        st.session_state['portfolio_df'] = pd.DataFrame([{"Ticker": "0052.TW", "Units": 24000}, {"Ticker": "0050.TW", "Units": 0}])
 
     edited_df = st.data_editor(st.session_state['portfolio_df'], num_rows="dynamic")
     st.session_state['portfolio_df'] = edited_df
@@ -134,7 +134,7 @@ with tab3:
         with st.form("trade_form"):
             col_d1, col_d2 = st.columns(2)
             d_date = col_d1.date_input("日期", date.today())
-            d_ticker = col_d2.text_input("代號", "009814")
+            d_ticker = col_d2.text_input("代號", "0052")
             col_d3, col_d4 = st.columns(2)
             d_action = col_d3.selectbox("動作", ["Buy", "Sell", "Pledge"])
             d_total_amt = col_d4.number_input("總金額 (含稅費)", step=1000)
@@ -155,13 +155,13 @@ with tab3:
 
 # === E. 資產績效 (手動輸入版) ===
 with tab4:
-    st.header("📈 資產績效總覽 (手動結算)")
+    st.header("📈 資產績效總覽")
     
     col_main1, col_main2 = st.columns([1, 2])
     
     # 1. 總本金管理 (分母)
     with col_main1:
-        st.subheader("💰 累積本金 (分母)")
+        st.subheader("💰 累積本金")
         if os.path.exists(CAPITAL_FILE):
             df_cap = pd.read_csv(CAPITAL_FILE)
             edited_cap = st.data_editor(df_cap, num_rows="dynamic", key="cap_editor")
@@ -212,3 +212,4 @@ with tab4:
             
             # 進度條
             st.progress(min(max((roi + 50) / 100, 0.0), 1.0))
+
