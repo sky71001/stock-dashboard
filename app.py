@@ -7,7 +7,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 # --- 頁面設定 ---
 st.set_page_config(page_title="Invest Command Pro", layout="wide", initial_sidebar_state="expanded")
-st.title("🛡️ 投資決策中心 V2.1 (Cloud DB)")
+st.title("🛡️ 投資決策中心 V2.1 ")
 
 # --- 連接 Google Sheets (核心函式) ---
 @st.cache_resource
@@ -74,7 +74,7 @@ with st.sidebar:
     default_rules = pd.DataFrame([
         {"Threshold": 30.0, "Action": "20%買QQQ/938"},
         {"Threshold": 40.0, "Action": "40%買9815/52"},
-        {"Threshold": 60.0, "Action": "50%全轉QLD/663l"}
+        {"Threshold": 60.0, "Action": "50%全轉QLD/663L"}
     ])
     vix_rules_df = load_data("Vix_Rules", default_rules)
     
@@ -315,3 +315,4 @@ with tab4:
             r3.metric("ROI", f"{roi:.2f}%", delta=profit_loss)
             
             st.progress(min(max((roi + 50) / 100, 0.0), 1.0))
+
