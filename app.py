@@ -6,15 +6,13 @@ import os
 
 # --- 頁面設定 ---
 st.set_page_config(page_title="Invest Command", layout="wide", initial_sidebar_state="expanded")
-st.title("🛡️ 投資決策與資產指揮中心 v5.0")
+st.title("🛡️ 投資決策與資產指揮中心 v6.0")
 
 # --- 初始化 Session State ---
 if 'total_market_val' not in st.session_state:
     st.session_state['total_market_val'] = 0.0
-if 'total_loan_amount' not in st.session_state:
-    st.session_state['total_loan_amount'] = 0.0
 
-# --- 檔案處理 (資料庫) ---
+# --- 檔案處理 (確保檔案存在) ---
 TRADE_FILE = 'trade_log.csv'
 if not os.path.exists(TRADE_FILE):
     pd.DataFrame(columns=["Date", "Ticker", "Action", "Price", "Units", "Total_Amt", "Note"]).to_csv(TRADE_FILE, index=False)
@@ -23,40 +21,38 @@ CAPITAL_FILE = 'capital_log.csv'
 if not os.path.exists(CAPITAL_FILE):
     pd.DataFrame(columns=["Date", "Type", "Amount", "Note"]).to_csv(CAPITAL_FILE, index=False)
 
-# VIX 規則檔
 VIX_RULE_FILE = 'vix_rules.csv'
 if not os.path.exists(VIX_RULE_FILE):
-    # 預設規則
+    # 預設多層級策略
     pd.DataFrame([
         {"Threshold": 20.0, "Action": "暫停加碼，檢查維持率"},
-        {"Threshold": 30.0, "Action": "準備現金，若跌破支撐執行減碼"},
-        {"Threshold": 45.0, "Action": "市場極度恐慌，分批抄底或變現救維持率"}
+        {"Threshold": 30.0, "Action": "觸發恐慌：準備現金，若跌破支撐執行減碼"},
+        {"Threshold": 40.0, "Action": "極度恐慌：優先保命，變現還款提升維持率至 160%"}
     ]).to_csv(VIX_RULE_FILE, index=False)
 
-# --- A. 側邊介面 (VIX 多層次設定) ---
+# --- A. 側邊介面 (VIX 多層次策略) ---
 with st.sidebar:
     st.header("⚙️ 警戒與策略設定")
     
-    # 1. VIX 設定 (動態表格)
+    # 1. VIX 設定 (多層級)
     st.subheader("1. VIX 恐慌對策矩陣")
-    st.caption("設定不同 VIX 數值對應的 SOP (數值越大優先級越高)")
+    st.caption("👇 系統將執行「已觸發」中數值最高的策略")
     
+    # 讀取並讓使用者編輯
     vix_rules_df = pd.read_csv(VIX_RULE_FILE)
     edited_vix_rules = st.data_editor(vix_rules_df, num_rows="dynamic", hide_index=True, key="vix_editor")
     
-    # 自動儲存 VIX 規則
+    # 即時儲存
     if not vix_rules_df.equals(edited_vix_rules):
         edited_vix_rules.to_csv(VIX_RULE_FILE, index=False)
-        st.success("VIX 規則已更新")
+        st.success("策略已更新！")
+        st.rerun()
     
     st.divider()
     
     # 2. 質押設定
     st.subheader("2. 質押風控")
     maint_alert_val = st.number_input("維持率警戒線 (%)", value=140)
-    
-    st.divider()
-    st.info("💡 提示：若修改了 VIX 規則或交易紀錄，請確認資料已儲存。")
 
 # --- 功能分頁 ---
 tab1, tab2, tab3, tab4 = st.tabs(["早安決策", "維持率監控", "交易紀錄(管理)", "資產變化(ROI)"])
@@ -76,27 +72,28 @@ with tab1:
         curr_vix = 0.0
         col_k1.error("VIX 連線失敗")
 
-    # VIX 策略判定邏輯 (取觸發的最高值)
+    # VIX 策略判定 (Bubble Sort Logic)
     st.subheader("🛡️ VIX 防禦指令")
     
-    # 讀取規則並排序 (由大到小)
+    # 讀取最新規則並由大到小排序
     rules = pd.read_csv(VIX_RULE_FILE).sort_values(by="Threshold", ascending=False)
     triggered_rule = None
     
+    # 尋找符合條件的最高閾值
     for index, row in rules.iterrows():
         if curr_vix >= row['Threshold']:
             triggered_rule = row
-            break # 找到最高滿足條件就停止
+            break 
     
     if triggered_rule is not None:
         st.error(f"🚨 **警報觸發 (VIX > {triggered_rule['Threshold']})**")
         st.markdown(f"### 執行 SOP：\n> **{triggered_rule['Action']}**")
     else:
-        st.success("✅ VIX 數值在安全範圍內，依正常計畫執行。")
+        st.success("✅ VIX 數值在安全範圍內 (未觸發任何策略)。")
 
     st.divider()
 
-    # CBOE & CNN (保持原樣)
+    # CBOE & CNN
     st.subheader("📉 加減碼訊號判定")
     col_i1, col_i2 = st.columns(2)
     cboe_val = col_i1.number_input("CBOE Equity P/C Ratio", value=0.60, step=0.01)
@@ -120,7 +117,6 @@ with tab2:
     # 1. 負債
     st.subheader("1. 借貸負債")
     loan_input = st.number_input("目前總質押借款金額 (TWD)", value=1000000, step=10000)
-    st.session_state['total_loan_amount'] = loan_input
     
     # 2. 資產
     st.subheader("2. 抵押資產")
@@ -174,15 +170,12 @@ with tab2:
             else:
                 st.info("無借款")
 
-# === D. 交易紀錄 (邏輯修正版) ===
+# === D. 交易紀錄 (邏輯與 Bug 修復) ===
 with tab3:
     st.header("📝 交易資料庫管理")
     
-    # 邏輯修正：為了防止「刪除後新增」導致資料回溯，我們明確分開「新增區」與「編輯區」
-    # 並且強制在操作後 Rerun 讀取最新 CSV
-    
-    # --- 新增區塊 ---
-    with st.expander("➕ 新增單筆交易 (請自行輸入總金額)", expanded=False):
+    # 區塊 1: 新增 (Input Form)
+    with st.expander("➕ 新增單筆交易", expanded=False):
         with st.form("trade_form"):
             col_d1, col_d2 = st.columns(2)
             d_date = col_d1.date_input("日期", date.today())
@@ -193,12 +186,12 @@ with tab3:
             d_price = col_d4.number_input("成交單價", step=0.1)
             d_units = col_d5.number_input("股數/單位", step=1000)
             
-            # 使用者要求：手動輸入總金額
-            d_total_amt = st.number_input("交易總金額 (含手續費/稅)", step=1000, help="買入請填正數，賣出請填正數，系統會自動判斷")
+            # 使用者要求：手動輸入總金額 (含手續費等)
+            d_total_amt = st.number_input("交易總金額 (台幣)", step=1000, help="請直接填入交割金額，買入或賣出皆填正數即可")
             d_note = st.text_input("備註")
             
             if st.form_submit_button("寫入資料庫"):
-                # 重新讀取最新的 CSV (確保包含剛才可能刪除的變更)
+                # 重新讀取最新的 CSV (避免覆蓋到編輯過的舊資料)
                 current_df = pd.read_csv(TRADE_FILE)
                 new_row = pd.DataFrame({
                     "Date": [d_date], "Ticker": [d_ticker], "Action": [d_action],
@@ -206,34 +199,33 @@ with tab3:
                     "Note": [d_note]
                 })
                 pd.concat([current_df, new_row]).to_csv(TRADE_FILE, index=False)
-                st.success("已新增！頁面將自動刷新。")
-                st.rerun() # 強制刷新
+                st.success("已新增！正在重整頁面...")
+                st.rerun() # 強制刷新，解決資料回溯問題
 
-    # --- 編輯與刪除區塊 ---
+    # 區塊 2: 編輯與刪除 (Data Editor)
     st.subheader("📋 歷史紀錄總表 (可編輯/刪除)")
     
     if os.path.exists(TRADE_FILE):
-        # 這裡一定要讀取最新的
+        # 務必每次重讀
         df_log = pd.read_csv(TRADE_FILE)
         
-        # Data Editor
         edited_log = st.data_editor(
             df_log,
             num_rows="dynamic",
             use_container_width=True,
-            key="log_editor"
+            key="log_editor_v6" # 更改 Key 以防快取衝突
         )
         
-        # 偵測是否有變動
+        # 儲存邏輯：只要檢測到 DataFrame 不一樣，就顯示儲存按鈕
         if not df_log.equals(edited_log):
-            if st.button("💾 偵測到變動 - 點此確認儲存 (Save)"):
+            if st.button("💾 偵測到變動 - 點此確認儲存"):
                 edited_log.to_csv(TRADE_FILE, index=False)
                 st.success("資料庫已同步更新！")
-                st.rerun() # 強制刷新以確保一致性
+                st.rerun() # 強制刷新
 
-# === E. 資產變化 (現金流修正版) ===
+# === E. 資產變化 (邏輯修正) ===
 with tab4:
-    st.header("📈 資產績效總覽 (淨值法)")
+    st.header("📈 資產績效總覽 (損益法)")
     
     col_e1, col_e2 = st.columns([1, 2])
     
@@ -253,50 +245,49 @@ with tab4:
             
         st.metric("累積總投入本金", f"${total_principal:,.0f}")
 
-    # E.2 報酬率計算 (邏輯重構)
+    # E.2 報酬率計算 (User Algorithm)
     with col_e2:
         st.subheader("📊 績效儀表板")
         
         # 1. 取得股票市值 (來自 Tab 2)
         live_market_val = st.session_state['total_market_val']
         
-        # 2. 取得負債 (來自 Tab 2)
-        live_loan = st.session_state['total_loan_amount']
-
-        # 3. 計算「現金餘額」(Cash Balance)
-        # 邏輯：現金餘額 = 總本金 + (賣出總額 - 買入總額)
-        # 假設 Pledge 動作不影響現金流(除非你定義為借款入金)，這裡先只算 Buy/Sell
+        # 2. 計算交易現金流 (Realized Cash Flow)
         trade_df = pd.read_csv(TRADE_FILE)
-        
+        # Buy 金額
         total_buy = trade_df[trade_df['Action'] == 'Buy']['Total_Amt'].sum()
+        # Sell 金額
         total_sell = trade_df[trade_df['Action'] == 'Sell']['Total_Amt'].sum()
         
-        # 試算現金餘額 (假設本金全部先變現金)
-        # 意義：還留在帳戶裡的現金 (包含未投入的本金 + 賣股回來的錢 - 買股花掉的錢)
-        cash_balance = total_principal + total_sell - total_buy
+        # 淨交易現金流 (通常為負值，代表資金還在股市裡)
+        net_trade_flow = total_sell - total_buy
         
-        # 4. 計算總權益 (Net Equity)
-        # 總權益 = 股票市值 + 現金餘額 - 質押負債
-        net_equity = live_market_val + cash_balance - live_loan
+        # 3. 計算總獲利金額 (Total Profit)
+        # 公式：目前的股票值多少錢 + 已經放口袋的錢(賣出) - 當初投入買股的錢(買入)
+        # 這樣就不用管「本金」是不是在股票裡，因為「買入」已經扣掉了成本。
+        total_profit = live_market_val + net_trade_flow
         
-        # 5. ROI 計算
+        # 4. ROI 計算
         roi = 0.0
         if total_principal > 0:
-            roi = ((net_equity - total_principal) / total_principal) * 100
+            roi = (total_profit / total_principal) * 100
             
         # --- 顯示 ---
         if live_market_val == 0 and total_buy > 0:
-            st.warning("⚠️ 警告：股票市值為 0。請先至「Tab 2」更新股價，否則績效不準確。")
+            st.warning("⚠️ 警告：股票市值為 0。請先至「Tab 2」更新股價，否則績效將嚴重低估。")
         
         c1, c2, c3 = st.columns(3)
-        c1.metric("1. 股票市值", f"${live_market_val:,.0f}")
-        c2.metric("2. 帳上現金 (推估)", f"${cash_balance:,.0f}", help="總本金 - 買入 + 賣出")
-        c3.metric("3. 質押負債", f"-${live_loan:,.0f}")
+        c1.metric("1. 股票現值", f"${live_market_val:,.0f}")
+        c2.metric("2. 交易淨流 (賣-買)", f"${net_trade_flow:,.0f}", help="賣出總額 - 買入總額")
+        c3.metric("3. 總獲利金額", f"${total_profit:,.0f}", delta=None)
         
         st.divider()
         
         final_c1, final_c2 = st.columns(2)
-        final_c1.metric("淨資產總值 (Net Equity)", f"${net_equity:,.0f}", help="市值 + 現金 - 負債")
-        final_c2.metric("總報酬率 (ROI)", f"{roi:.2f}%", delta_color="normal")
-
-        st.caption(f"計算公式：(淨資產 {net_equity:,.0f} - 總本金 {total_principal:,.0f}) / 總本金")
+        final_c1.metric("總報酬率 (ROI)", f"{roi:.2f}%", help="總獲利金額 / 累積本金")
+        
+        # 進度條視覺化 (-100% to +100%)
+        progress_val = (roi + 100) / 200
+        st.progress(min(max(progress_val, 0.0), 1.0))
+        
+        st.caption(f"計算邏輯：(股票現值 {live_market_val:,.0f} + 交易淨流 {net_trade_flow:,.0f}) / 總本金 {total_principal:,.0f}")
