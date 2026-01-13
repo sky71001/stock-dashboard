@@ -284,7 +284,7 @@ with tab4:
                 c1.caption("⚠️ 請等待股價更新或至 Tab 2 檢查")
 
             # B. 空閒資金：可修改並儲存
-            new_cash_val = c2.number_input("2. 空閒資金 (Input & Save)", value=saved_cash_val, step=1000, help="修改後請點擊下方儲存按鈕")
+            new_cash_val = c2.number_input("2. 空閒資金 (Input & Save)", value=saved_cash_val, step=10.0, help="修改後請點擊下方儲存按鈕")
             
             # 如果數值有變動，顯示儲存按鈕
             if new_cash_val != saved_cash_val:
@@ -315,5 +315,6 @@ with tab4:
             r3.metric("ROI", f"{roi:.2f}%", delta=profit_loss)
             
             st.progress(min(max((roi + 50) / 100, 0.0), 1.0))
+
 
 
