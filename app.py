@@ -205,4 +205,53 @@ with tab3:
         )
         
         # 儲存按鈕
-        if st.button("💾 儲存修改
+        if st.button("💾 儲存修改至資料庫"):
+            edited_log.to_csv(TRADE_FILE, index=False)
+            st.success("✅ 資料庫已更新！")
+            st.rerun()
+
+# === E. 資產變化 (ROI) ===
+with tab4:
+    st.header("📈 資產績效總覽")
+    
+    col_e1, col_e2 = st.columns([1, 2])
+    
+    # E.1 本金管理
+    with col_e1:
+        st.subheader("💰 本金注入紀錄")
+        if os.path.exists(CAPITAL_FILE):
+            df_cap = pd.read_csv(CAPITAL_FILE)
+            # 同樣使用編輯器功能
+            edited_cap = st.data_editor(df_cap, num_rows="dynamic", key="cap_editor")
+            if st.button("💾 更新本金紀錄"):
+                edited_cap.to_csv(CAPITAL_FILE, index=False)
+                st.success("已更新")
+                st.rerun()
+            
+            total_principal = edited_cap['Amount'].sum()
+        else:
+            total_principal = 0
+            
+        st.metric("累積總投入本金", f"${total_principal:,.0f}")
+
+    # E.2 報酬率計算
+    with col_e2:
+        st.subheader("📊 績效儀表板")
+        
+        live_market_val = st.session_state['total_market_val']
+        live_loan = st.session_state['total_loan_amount']
+        
+        if live_market_val == 0:
+            st.warning("⚠️ 請先至「Tab 2」點擊更新股價，才能計算最新淨值。")
+        else:
+            net_equity = live_market_val - live_loan
+            roi = 0.0
+            if total_principal > 0:
+                roi = ((net_equity - total_principal) / total_principal) * 100
+            
+            c1, c2, c3 = st.columns(3)
+            c1.metric("股票總市值", f"${live_market_val:,.0f}")
+            c2.metric("扣除負債後淨值", f"${net_equity:,.0f}")
+            c3.metric("總報酬率 (ROI)", f"{roi:.2f}%", delta_color="normal")
+            
+            st.progress(min(max((roi + 50) / 100, 0.0), 1.0))
