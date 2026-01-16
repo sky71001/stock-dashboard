@@ -123,8 +123,8 @@ with tab1:
     st.divider()
     
     col_i1, col_i2 = st.columns(2)
-    cboe_val = col_i1.number_input("CBOE Equity P/C Ratio", value= , step=0.01)
-    cnn_val = col_i2.number_input("CNN Fear & Greed (P/C)", value= , step=0.01)
+    cboe_val = col_i1.number_input("CBOE Equity P/C Ratio", value=null , step=0.01)
+    cnn_val = col_i2.number_input("CNN Fear & Greed (P/C)", value=mull , step=0.01)
     
     signal_triggered = False
     if cnn_val <= 0.62:
@@ -315,6 +315,7 @@ with tab4:
             r3.metric("ROI", f"{roi:.2f}%", delta=profit_loss)
             
             st.progress(min(max((roi + 50) / 100, 0.0), 1.0))
+
 
 
 
