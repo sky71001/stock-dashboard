@@ -7,7 +7,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 # --- 頁面設定 ---
 st.set_page_config(page_title="Invest Command Pro", layout="wide", initial_sidebar_state="expanded")
-st.title("🛡️ 投資決策中心 V2.1 ")
+st.title("🛡️ 投資決策中心 V1.3 (Cloud)")
 
 # --- 連接 Google Sheets (核心函式) ---
 @st.cache_resource
@@ -35,7 +35,6 @@ def load_data(tab_name, default_df):
                 return default_df
         except gspread.WorksheetNotFound:
             worksheet = sheet.add_worksheet(title=tab_name, rows=100, cols=20)
-            # gspread 寫入時需確保沒有 NaN
             clean_df = default_df.fillna("")
             worksheet.update([clean_df.columns.values.tolist()] + clean_df.astype(str).values.tolist())
             return default_df
@@ -54,7 +53,7 @@ def save_data(tab_name, df):
             worksheet = sheet.add_worksheet(title=tab_name, rows=100, cols=20)
         
         worksheet.clear()
-        df_str = df.astype(str) # 轉字串避免 JSON 錯誤
+        df_str = df.astype(str)
         worksheet.update([df.columns.values.tolist()] + df_str.values.tolist())
         st.toast(f"✅ {tab_name} 已儲存至雲端")
     except Exception as e:
@@ -74,7 +73,7 @@ with st.sidebar:
     default_rules = pd.DataFrame([
         {"Threshold": 30.0, "Action": "20%買QQQ/938"},
         {"Threshold": 40.0, "Action": "40%買9815/52"},
-        {"Threshold": 60.0, "Action": "50%全轉QLD/663L"}
+        {"Threshold": 60.0, "Action": "50%全轉QLD/663l"}
     ])
     vix_rules_df = load_data("Vix_Rules", default_rules)
     
@@ -93,7 +92,7 @@ with st.sidebar:
 # --- 功能分頁 ---
 tab1, tab2, tab3, tab4 = st.tabs(["今日決策", "維持率監控", "交易紀錄", "資產績效"])
 
-# === B. 早安決策 ===
+# === B. 早安決策 (修改為空白預設) ===
 with tab1:
     st.header("🌅 今日操作指引")
     col_k1, col_k2 = st.columns(2)
@@ -123,19 +122,24 @@ with tab1:
     st.divider()
     
     col_i1, col_i2 = st.columns(2)
-    cboe_val = col_i1.number_input("CBOE Equity P/C Ratio", value=None , step=0.01)
-    cnn_val = col_i2.number_input("CNN Fear & Greed (P/C)", value=None , step=0.01)
+    # 修改：value=None 讓輸入框變成空白，強制手動輸入
+    cboe_val = col_i1.number_input("CBOE Equity P/C Ratio", value=None, step=0.01, placeholder="請輸入...")
+    cnn_val = col_i2.number_input("CNN Fear & Greed (P/C)", value=None, step=0.01, placeholder="請輸入...")
     
-    signal_triggered = False
-    if cnn_val <= 0.62:
-        st.error("⚠️ **主動防禦 (CNN ≦ 0.62)**：減碼總本金 10%或清空質押部位。")
-        signal_triggered = True
-    elif cboe_val <= 0.50:
-        st.warning("⚠️ **戰術調整 (CBOE ≦ 0.50)**：減碼市值 5%或質押部位10%。")
-        signal_triggered = True
-    
-    if not signal_triggered:
-        st.info("✅ 發呆續抱")
+    # 邏輯判斷：必須兩個都有值才執行，否則顯示提示
+    if cboe_val is not None and cnn_val is not None:
+        signal_triggered = False
+        if cnn_val <= 0.62:
+            st.error("⚠️ **主動防禦 (CNN ≦ 0.62)**：減碼總本金 10%或清空質押部位。")
+            signal_triggered = True
+        elif cboe_val <= 0.50:
+            st.warning("⚠️ **戰術調整 (CBOE ≦ 0.50)**：減碼市值 5%或質押部位10%。")
+            signal_triggered = True
+        
+        if not signal_triggered:
+            st.info("✅ 發呆續抱")
+    else:
+        st.info("ℹ️ 請輸入 CBOE 與 CNN 數值以啟動分析")
 
 # === C. 維持率監控 (自動計算版) ===
 with tab2:
@@ -160,37 +164,31 @@ with tab2:
                 if float(row['Units']) > 0:
                     try:
                         ticker = row['Ticker']
-                        # 簡單檢核：如果是台股沒加 .TW，自動幫忙加 (防呆)
                         if ticker.isdigit() and len(ticker) == 4:
                             ticker += ".TW"
-                        
                         price = yf.Ticker(ticker).history(period='1d')['Close'].iloc[-1]
                         total += price * float(row['Units'])
                     except: 
-                        pass # 抓不到就跳過
+                        pass 
         return total
 
-    # 1. 如果 Session State 的市值為 0 (剛開啟 App)，自動算一次
+    # 1. 自動更新 (若 Session 為 0)
     if st.session_state['total_market_val'] == 0.0:
         st.session_state['total_market_val'] = calculate_total_market_value(portfolio_df)
     
-    # 2. 顯示持倉編輯器
     st.caption("👇 持倉明細 (修改後請按儲存)")
     edited_portfolio = st.data_editor(portfolio_df, num_rows="dynamic")
     
-    # 按鈕區
     col_btn1, col_btn2 = st.columns([1, 4])
     if col_btn1.button("💾 儲存持倉"):
         save_data("Portfolio", edited_portfolio)
-        # 儲存後強制重算一次，確保數據準確
         st.session_state['total_market_val'] = 0.0 
         st.rerun()
 
     if col_btn2.button("🔄 強制刷新股價"):
-        st.session_state['total_market_val'] = 0.0 # 歸零
-        st.rerun() # 重跑就會觸發上面的自動計算
+        st.session_state['total_market_val'] = 0.0 
+        st.rerun() 
 
-    # 顯示計算結果
     total_val = st.session_state['total_market_val']
     
     st.divider()
@@ -241,7 +239,6 @@ with tab4:
     
     col_main1, col_main2 = st.columns([1, 2])
     
-    # 1. 本金管理
     with col_main1:
         st.subheader("💰 累積本金")
         default_cap = pd.DataFrame(columns=["Date", "Type", "Amount", "Note"])
@@ -256,52 +253,41 @@ with tab4:
         total_principal = edited_cap['Amount'].sum()
         st.info(f"總投入本金：\n# ${total_principal:,.0f}")
 
-    # 2. 績效計算機 (自動連動 + 空閒資金儲存)
     with col_main2:
         st.subheader("📊 績效計算")
         
         with st.container(border=True):
-            # 讀取雲端狀態表 (Status Sheet) 來獲取空閒資金
             default_status = pd.DataFrame([{"Key": "Idle_Cash", "Value": 0}])
             status_df = load_data("Status", default_status)
             
-            # 確保有資料
             if status_df.empty or "Idle_Cash" not in status_df["Key"].values:
-                 # 若沒有則初始化
                  status_df = pd.DataFrame([{"Key": "Idle_Cash", "Value": 0}])
 
-            # 取出儲存的空閒資金
             saved_cash_row = status_df[status_df["Key"] == "Idle_Cash"]
             saved_cash_val = float(saved_cash_row["Value"].iloc[0]) if not saved_cash_row.empty else 0.0
 
             c1, c2 = st.columns(2)
             
-            # A. 股票現值：自動鎖定 (從 Session State 抓)
             live_market_val = st.session_state['total_market_val']
             c1.markdown(f"**1. 股票現值 (Auto)**")
             c1.info(f"${live_market_val:,.0f}")
             if live_market_val == 0:
                 c1.caption("⚠️ 請等待股價更新或至 Tab 2 檢查")
 
-            # B. 空閒資金：可修改並儲存
-            new_cash_val = c2.number_input("2. 空閒資金 (Input & Save)", value=saved_cash_val, step=10.0, help="修改後請點擊下方儲存按鈕")
+            new_cash_val = c2.number_input("2. 空閒資金 (Input & Save)", value=saved_cash_val, step=1000.0)
             
-            # 如果數值有變動，顯示儲存按鈕
             if new_cash_val != saved_cash_val:
                 if c2.button("💾 更新空閒資金"):
-                    # 更新 DataFrame 並寫入 Status 分頁
                     status_df.loc[status_df["Key"] == "Idle_Cash", "Value"] = new_cash_val
                     save_data("Status", status_df)
                     st.toast("空閒資金已更新！")
                     st.rerun()
             
-            # C. 質押負債
             current_loan = st.session_state['total_loan_amount']
             st.markdown(f"**3. 質押負債 (From Tab 2):** :red[**-${current_loan:,.0f}**]")
             
             st.divider()
 
-            # 計算 ROI
             net_equity = live_market_val + new_cash_val - current_loan
             profit_loss = net_equity - total_principal
             
@@ -315,10 +301,3 @@ with tab4:
             r3.metric("ROI", f"{roi:.2f}%", delta=profit_loss)
             
             st.progress(min(max((roi + 50) / 100, 0.0), 1.0))
-
-
-
-
-
-
-
