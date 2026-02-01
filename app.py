@@ -7,9 +7,9 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 # --- 頁面設定 ---
 st.set_page_config(page_title="Invest Command Pro", layout="wide", initial_sidebar_state="expanded")
-st.title("🛡️ 投資決策中心 V1.3 (Cloud)")
+st.title("🛡️ 投資決策中心 V2.3 (Stable Cache)")
 
-# --- 連接 Google Sheets (核心函式) ---
+# --- 連接 Google Sheets ---
 @st.cache_resource
 def get_google_sheet_client():
     creds_dict = st.secrets["gcp_service_account"]
@@ -20,9 +20,8 @@ def get_google_sheet_client():
 
 SHEET_NAME = "Investment_Database"
 
-# --- 資料讀寫工具函式 ---
+# --- 資料讀寫工具 ---
 def load_data(tab_name, default_df):
-    """從 Google Sheet 指定分頁讀取資料，若為空則回傳預設值"""
     try:
         client = get_google_sheet_client()
         sheet = client.open(SHEET_NAME)
@@ -43,7 +42,6 @@ def load_data(tab_name, default_df):
         return default_df
 
 def save_data(tab_name, df):
-    """將 DataFrame 寫入 Google Sheet 指定分頁 (覆蓋模式)"""
     try:
         client = get_google_sheet_client()
         sheet = client.open(SHEET_NAME)
@@ -55,21 +53,48 @@ def save_data(tab_name, df):
         worksheet.clear()
         df_str = df.astype(str)
         worksheet.update([df.columns.values.tolist()] + df_str.values.tolist())
-        st.toast(f"✅ {tab_name} 已儲存至雲端")
+        # 移除 toast 以減少干擾，改用 print 或靜默
+        # st.toast(f"✅ {tab_name} 已儲存") 
     except Exception as e:
         st.error(f"儲存失敗: {e}")
+
+# --- 新增：狀態管理函數 (讀寫 Status 分頁) ---
+def update_status_value(key, value):
+    """更新 Status 分頁中的特定數值"""
+    # 先讀取現有狀態
+    default_status = pd.DataFrame([{"Key": "Idle_Cash", "Value": 0}, {"Key": "Last_Market_Val", "Value": 0}])
+    status_df = load_data("Status", default_status)
+    
+    # 確保 Key 存在
+    if key not in status_df["Key"].values:
+        new_row = pd.DataFrame([{"Key": key, "Value": value}])
+        status_df = pd.concat([status_df, new_row], ignore_index=True)
+    else:
+        status_df.loc[status_df["Key"] == key, "Value"] = value
+    
+    save_data("Status", status_df)
+
+def get_status_value(key):
+    """從 Status 分頁讀取特定數值"""
+    default_status = pd.DataFrame([{"Key": "Idle_Cash", "Value": 0}, {"Key": "Last_Market_Val", "Value": 0}])
+    status_df = load_data("Status", default_status)
+    
+    row = status_df[status_df["Key"] == key]
+    if not row.empty:
+        return float(row["Value"].iloc[0])
+    return 0.0
 
 # --- 初始化 Session State ---
 if 'total_loan_amount' not in st.session_state:
     st.session_state['total_loan_amount'] = 0.0
-if 'total_market_val' not in st.session_state:
-    st.session_state['total_market_val'] = 0.0
+# 這裡改為：如果 Session 是 0，嘗試去雲端抓上次存的，不要直接歸零
+if 'total_market_val' not in st.session_state or st.session_state['total_market_val'] == 0:
+    st.session_state['total_market_val'] = get_status_value("Last_Market_Val")
 
 # --- A. 側邊介面 ---
 with st.sidebar:
-    st.header("⚙️ 警戒與策略設定")
+    st.header("⚙️ 設定")
     
-    # 讀取 Vix Rules
     default_rules = pd.DataFrame([
         {"Threshold": 30.0, "Action": "20%買QQQ/938"},
         {"Threshold": 40.0, "Action": "40%買9815/52"},
@@ -77,22 +102,20 @@ with st.sidebar:
     ])
     vix_rules_df = load_data("Vix_Rules", default_rules)
     
-    st.subheader("1. VIX 恐慌對策")
+    st.subheader("1. VIX 對策")
     edited_vix_rules = st.data_editor(vix_rules_df, num_rows="dynamic", hide_index=True, key="vix_editor")
-    
     if st.button("💾 更新策略"):
         save_data("Vix_Rules", edited_vix_rules)
         st.rerun()
 
     st.divider()
-    
     st.subheader("2. 質押風控")
     maint_alert_val = st.number_input("維持率警戒線 (%)", value=140)
 
 # --- 功能分頁 ---
 tab1, tab2, tab3, tab4 = st.tabs(["今日決策", "維持率監控", "交易紀錄", "資產績效"])
 
-# === B. 早安決策 (修改為空白預設) ===
+# === B. 今日決策 ===
 with tab1:
     st.header("🌅 今日操作指引")
     col_k1, col_k2 = st.columns(2)
@@ -104,10 +127,8 @@ with tab1:
         curr_vix = 0.0
         col_k1.error("VIX 連線失敗")
 
-    # VIX 策略判定
     vix_rules_df['Threshold'] = pd.to_numeric(vix_rules_df['Threshold'], errors='coerce')
     rules = vix_rules_df.sort_values(by="Threshold", ascending=False)
-    
     triggered_rule = None
     for index, row in rules.iterrows():
         if curr_vix >= row['Threshold']:
@@ -120,13 +141,10 @@ with tab1:
         st.success("✅ VIX 放空發呆")
 
     st.divider()
-    
     col_i1, col_i2 = st.columns(2)
-    # 修改：value=None 讓輸入框變成空白，強制手動輸入
     cboe_val = col_i1.number_input("CBOE Equity P/C Ratio", value=None, step=0.01, placeholder="請輸入...")
     cnn_val = col_i2.number_input("CNN Fear & Greed (P/C)", value=None, step=0.01, placeholder="請輸入...")
     
-    # 邏輯判斷：必須兩個都有值才執行，否則顯示提示
     if cboe_val is not None and cnn_val is not None:
         signal_triggered = False
         if cnn_val <= 0.62:
@@ -135,67 +153,61 @@ with tab1:
         elif cboe_val <= 0.50:
             st.warning("⚠️ **戰術調整 (CBOE ≦ 0.50)**：減碼市值 5%或質押部位10%。")
             signal_triggered = True
-        
         if not signal_triggered:
             st.info("✅ 發呆續抱")
     else:
-        st.info("ℹ️ 請輸入 CBOE 與 CNN 數值以啟動分析")
+        st.info("ℹ️ 請輸入數據以啟動分析")
 
-# === C. 維持率監控 (自動計算版) ===
+# === C. 維持率監控 (核心計算區) ===
 with tab2:
     st.header("📊 質押與市值監控")
     
     col_t2_1, col_t2_2 = st.columns([2, 1])
-    
     with col_t2_1:
         loan_input = st.number_input("目前總質押借款金額 (TWD)", value=0, step=1000)
         st.session_state['total_loan_amount'] = loan_input
     
-    # 讀取雲端持倉
     default_portfolio = pd.DataFrame([{"Ticker": "009814.TW", "Units": 0}, {"Ticker": "0052.TW", "Units": 0}])
     portfolio_df = load_data("Portfolio", default_portfolio)
     portfolio_df['Units'] = pd.to_numeric(portfolio_df['Units'], errors='coerce').fillna(0)
     
-    # --- 自動計算市值邏輯 ---
-    def calculate_total_market_value(df):
-        total = 0.0
-        with st.spinner("⏳ 正在自動更新股價..."):
-            for idx, row in df.iterrows():
-                if float(row['Units']) > 0:
-                    try:
-                        ticker = row['Ticker']
-                        if ticker.isdigit() and len(ticker) == 4:
-                            ticker += ".TW"
-                        price = yf.Ticker(ticker).history(period='1d')['Close'].iloc[-1]
-                        total += price * float(row['Units'])
-                    except: 
-                        pass 
-        return total
-
-    # 1. 自動更新 (若 Session 為 0)
-    if st.session_state['total_market_val'] == 0.0:
-        st.session_state['total_market_val'] = calculate_total_market_value(portfolio_df)
-    
-    st.caption("👇 持倉明細 (修改後請按儲存)")
+    st.caption("👇 持倉明細")
     edited_portfolio = st.data_editor(portfolio_df, num_rows="dynamic")
     
     col_btn1, col_btn2 = st.columns([1, 4])
+    
+    # 儲存持倉按鈕
     if col_btn1.button("💾 儲存持倉"):
         save_data("Portfolio", edited_portfolio)
-        st.session_state['total_market_val'] = 0.0 
-        st.rerun()
+        st.success("持倉已存")
 
-    if col_btn2.button("🔄 強制刷新股價"):
-        st.session_state['total_market_val'] = 0.0 
-        st.rerun() 
+    # 計算更新按鈕 (這是唯一的計算源頭)
+    if col_btn2.button("🔄 更新股價 & 寫入快照"):
+        total_val = 0.0
+        with st.spinner("⏳ 正在連線交易所抓取最新報價..."):
+            for idx, row in edited_portfolio.iterrows():
+                if float(row['Units']) > 0:
+                    try:
+                        ticker = row['Ticker']
+                        if ticker.isdigit() and len(ticker) == 4: ticker += ".TW"
+                        price = yf.Ticker(ticker).history(period='1d')['Close'].iloc[-1]
+                        total_val += price * float(row['Units'])
+                    except: pass
+        
+        # 關鍵步驟：更新 Session 並 寫入雲端 Status
+        st.session_state['total_market_val'] = total_val
+        update_status_value("Last_Market_Val", total_val)
+        st.success(f"已更新市值：${total_val:,.0f} 並存入雲端快照")
+        # 這裡不 reruan，讓使用者看到結果
 
-    total_val = st.session_state['total_market_val']
+    # 顯示結果 (優先顯示 Session 中的值，這樣切換頁面回來數值不會跑掉)
+    display_val = st.session_state['total_market_val']
     
     st.divider()
-    st.metric("擔保品總市值", f"${total_val:,.0f}")
+    st.metric("擔保品總市值 (Snapshot)", f"${display_val:,.0f}")
     
     if loan_input > 0:
-        m_ratio = (total_val / loan_input) * 100
+        m_ratio = (display_val / loan_input) * 100
         st.metric("整戶維持率", f"{m_ratio:.2f}%", delta_color="inverse")
         if m_ratio < maint_alert_val:
             st.error(f"🚨 維持率低於 {maint_alert_val}%！")
@@ -205,7 +217,6 @@ with tab2:
 # === D. 交易紀錄 ===
 with tab3:
     st.header("📝 交易資料庫")
-    
     default_trade = pd.DataFrame(columns=["Date", "Ticker", "Action", "Total_Amt", "Note"])
     trade_df = load_data("Trade_Log", default_trade)
     
@@ -223,20 +234,18 @@ with tab3:
                 new_row = pd.DataFrame([{"Date": str(d_date), "Ticker": d_ticker, "Action": d_action, "Total_Amt": d_total_amt, "Note": d_note}])
                 updated_df = pd.concat([trade_df, new_row], ignore_index=True)
                 save_data("Trade_Log", updated_df)
-                st.success("已上傳雲端")
+                st.success("已上傳")
                 st.rerun()
 
-    st.subheader("📋 歷史紀錄")
     edited_trade_log = st.data_editor(trade_df, num_rows="dynamic", use_container_width=True)
-    if st.button("💾 儲存交易紀錄變更"):
+    if st.button("💾 儲存交易紀錄"):
         save_data("Trade_Log", edited_trade_log)
-        st.success("資料庫已更新")
+        st.success("已更新")
         st.rerun()
 
-# === E. 資產績效 (連動版) ===
+# === E. 資產績效 (穩定版) ===
 with tab4:
     st.header("📈 資產績效總覽")
-    
     col_main1, col_main2 = st.columns([1, 2])
     
     with col_main1:
@@ -244,53 +253,42 @@ with tab4:
         default_cap = pd.DataFrame(columns=["Date", "Type", "Amount", "Note"])
         cap_df = load_data("Capital_Log", default_cap)
         cap_df['Amount'] = pd.to_numeric(cap_df['Amount'], errors='coerce').fillna(0)
-        
         edited_cap = st.data_editor(cap_df, num_rows="dynamic", key="cap_editor")
         if st.button("💾 更新本金"):
             save_data("Capital_Log", edited_cap)
             st.rerun()
-            
         total_principal = edited_cap['Amount'].sum()
         st.info(f"總投入本金：\n# ${total_principal:,.0f}")
 
     with col_main2:
         st.subheader("📊 績效計算")
-        
         with st.container(border=True):
-            default_status = pd.DataFrame([{"Key": "Idle_Cash", "Value": 0}])
-            status_df = load_data("Status", default_status)
+            # 讀取空閒資金 (從 Status)
+            cash_val = get_status_value("Idle_Cash")
             
-            if status_df.empty or "Idle_Cash" not in status_df["Key"].values:
-                 status_df = pd.DataFrame([{"Key": "Idle_Cash", "Value": 0}])
-
-            saved_cash_row = status_df[status_df["Key"] == "Idle_Cash"]
-            saved_cash_val = float(saved_cash_row["Value"].iloc[0]) if not saved_cash_row.empty else 0.0
-
+            # 讀取股票市值 (從 Session -> 如果 Session 空則從 Status 讀)
+            # 這裡就是 "穩定" 的關鍵：它不會自己去算，而是讀取 Tab 2 算好存起來的值
+            stock_val = st.session_state['total_market_val']
+            
             c1, c2 = st.columns(2)
-            
-            live_market_val = st.session_state['total_market_val']
-            c1.markdown(f"**1. 股票現值 (Auto)**")
-            c1.info(f"${live_market_val:,.0f}")
-            if live_market_val == 0:
-                c1.caption("⚠️ 請等待股價更新或至 Tab 2 檢查")
+            c1.markdown(f"**1. 股票現值 (Read Only)**")
+            c1.info(f"${stock_val:,.0f}")
+            if stock_val == 0:
+                c1.warning("⚠️ 數值為 0，請至 Tab 2 按下「更新股價」")
 
-            new_cash_val = c2.number_input("2. 空閒資金 (Input & Save)", value=saved_cash_val, step=1000.0)
-            
-            if new_cash_val != saved_cash_val:
+            new_cash = c2.number_input("2. 空閒資金", value=cash_val, step=1000.0)
+            if new_cash != cash_val:
                 if c2.button("💾 更新空閒資金"):
-                    status_df.loc[status_df["Key"] == "Idle_Cash", "Value"] = new_cash_val
-                    save_data("Status", status_df)
-                    st.toast("空閒資金已更新！")
+                    update_status_value("Idle_Cash", new_cash)
+                    st.toast("已更新")
                     st.rerun()
-            
+
             current_loan = st.session_state['total_loan_amount']
-            st.markdown(f"**3. 質押負債 (From Tab 2):** :red[**-${current_loan:,.0f}**]")
-            
+            st.markdown(f"**3. 質押負債:** :red[**-${current_loan:,.0f}**]")
             st.divider()
 
-            net_equity = live_market_val + new_cash_val - current_loan
+            net_equity = stock_val + new_cash - current_loan
             profit_loss = net_equity - total_principal
-            
             roi = 0.0
             if total_principal > 0:
                 roi = (profit_loss / total_principal) * 100
@@ -299,5 +297,4 @@ with tab4:
             r1.metric("淨資產", f"${net_equity:,.0f}")
             r2.metric("未實現損益", f"${profit_loss:,.0f}")
             r3.metric("ROI", f"{roi:.2f}%", delta=profit_loss)
-            
             st.progress(min(max((roi + 50) / 100, 0.0), 1.0))
