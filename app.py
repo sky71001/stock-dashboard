@@ -7,7 +7,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 # --- 頁面設定 ---
 st.set_page_config(page_title="Invest Command Pro", layout="wide", initial_sidebar_state="expanded")
-st.title("🛡️ 投資決策中心 V2.3 (Stable Cache)")
+st.title("🛡️ 投資決策中心 V2.4 (Sync Logic)")
 
 # --- 連接 Google Sheets ---
 @st.cache_resource
@@ -29,7 +29,9 @@ def load_data(tab_name, default_df):
             worksheet = sheet.worksheet(tab_name)
             data = worksheet.get_all_records()
             if data:
-                return pd.DataFrame(data)
+                # 確保數值型欄位正確轉換
+                df = pd.DataFrame(data)
+                return df
             else:
                 return default_df
         except gspread.WorksheetNotFound:
@@ -53,41 +55,52 @@ def save_data(tab_name, df):
         worksheet.clear()
         df_str = df.astype(str)
         worksheet.update([df.columns.values.tolist()] + df_str.values.tolist())
-        # 移除 toast 以減少干擾，改用 print 或靜默
-        # st.toast(f"✅ {tab_name} 已儲存") 
     except Exception as e:
         st.error(f"儲存失敗: {e}")
 
-# --- 新增：狀態管理函數 (讀寫 Status 分頁) ---
+# --- 核心：狀態同步機制 (強化版) ---
 def update_status_value(key, value):
-    """更新 Status 分頁中的特定數值"""
-    # 先讀取現有狀態
+    """更新 Status，邏輯：有則改之，無則加之"""
     default_status = pd.DataFrame([{"Key": "Idle_Cash", "Value": 0}, {"Key": "Last_Market_Val", "Value": 0}])
     status_df = load_data("Status", default_status)
     
-    # 確保 Key 存在
-    if key not in status_df["Key"].values:
+    # 強制轉型避免比對錯誤
+    status_df["Key"] = status_df["Key"].astype(str)
+    
+    if key in status_df["Key"].values:
+        # 找到該 Key 的 Index 並更新
+        status_df.loc[status_df["Key"] == key, "Value"] = value
+    else:
+        # 新增
         new_row = pd.DataFrame([{"Key": key, "Value": value}])
         status_df = pd.concat([status_df, new_row], ignore_index=True)
-    else:
-        status_df.loc[status_df["Key"] == key, "Value"] = value
     
     save_data("Status", status_df)
 
 def get_status_value(key):
-    """從 Status 分頁讀取特定數值"""
+    """讀取 Status，強化邏輯：防止重複，只取最後一筆"""
     default_status = pd.DataFrame([{"Key": "Idle_Cash", "Value": 0}, {"Key": "Last_Market_Val", "Value": 0}])
     status_df = load_data("Status", default_status)
     
-    row = status_df[status_df["Key"] == key]
-    if not row.empty:
-        return float(row["Value"].iloc[0])
+    # 篩選出所有符合 Key 的行
+    rows = status_df[status_df["Key"] == key]
+    
+    if not rows.empty:
+        # .tail(1) 確保即使有重複，也只拿最後(最新)的那一筆
+        # .iloc[0] 取出數值
+        val = rows["Value"].tail(1).iloc[0]
+        # 嘗試轉 float，失敗回傳 0
+        try:
+            return float(val)
+        except:
+            return 0.0
     return 0.0
 
-# --- 初始化 Session State ---
+# --- 初始化 Session ---
 if 'total_loan_amount' not in st.session_state:
     st.session_state['total_loan_amount'] = 0.0
-# 這裡改為：如果 Session 是 0，嘗試去雲端抓上次存的，不要直接歸零
+
+# 啟動時：若 Session 是空的，去雲端抓一次最新的「上次計算結果」
 if 'total_market_val' not in st.session_state or st.session_state['total_market_val'] == 0:
     st.session_state['total_market_val'] = get_status_value("Last_Market_Val")
 
@@ -134,11 +147,10 @@ with tab1:
         if curr_vix >= row['Threshold']:
             triggered_rule = row
             break 
-    
     if triggered_rule is not None:
-        st.error(f"🚨 **警報觸發 (VIX > {triggered_rule['Threshold']})**\n> SOP: {triggered_rule['Action']}")
+        st.error(f"🚨 **警報 (VIX > {triggered_rule['Threshold']})**\n> SOP: {triggered_rule['Action']}")
     else:
-        st.success("✅ VIX 放空發呆")
+        st.success("✅ VIX 安全")
 
     st.divider()
     col_i1, col_i2 = st.columns(2)
@@ -148,17 +160,17 @@ with tab1:
     if cboe_val is not None and cnn_val is not None:
         signal_triggered = False
         if cnn_val <= 0.62:
-            st.error("⚠️ **主動防禦 (CNN ≦ 0.62)**：減碼總本金 10%或清空質押部位。")
+            st.error("⚠️ **防禦 (CNN ≦ 0.62)**：減碼本金 10% / 清質押")
             signal_triggered = True
         elif cboe_val <= 0.50:
-            st.warning("⚠️ **戰術調整 (CBOE ≦ 0.50)**：減碼市值 5%或質押部位10%。")
+            st.warning("⚠️ **調整 (CBOE ≦ 0.50)**：減碼市值 5% / 質押 10%")
             signal_triggered = True
         if not signal_triggered:
-            st.info("✅ 發呆續抱")
+            st.info("✅ 續抱")
     else:
-        st.info("ℹ️ 請輸入數據以啟動分析")
+        st.info("ℹ️ 輸入數值以分析")
 
-# === C. 維持率監控 (核心計算區) ===
+# === C. 維持率監控 (計算核心) ===
 with tab2:
     st.header("📊 質押與市值監控")
     
@@ -176,15 +188,14 @@ with tab2:
     
     col_btn1, col_btn2 = st.columns([1, 4])
     
-    # 儲存持倉按鈕
     if col_btn1.button("💾 儲存持倉"):
         save_data("Portfolio", edited_portfolio)
-        st.success("持倉已存")
+        st.success("已儲存")
 
-    # 計算更新按鈕 (這是唯一的計算源頭)
+    # 這是唯一的「寫入」觸發點
     if col_btn2.button("🔄 更新股價 & 寫入快照"):
         total_val = 0.0
-        with st.spinner("⏳ 正在連線交易所抓取最新報價..."):
+        with st.spinner("⏳ 更新報價中..."):
             for idx, row in edited_portfolio.iterrows():
                 if float(row['Units']) > 0:
                     try:
@@ -194,17 +205,17 @@ with tab2:
                         total_val += price * float(row['Units'])
                     except: pass
         
-        # 關鍵步驟：更新 Session 並 寫入雲端 Status
+        # 1. 更新瀏覽器記憶體
         st.session_state['total_market_val'] = total_val
+        # 2. 更新雲端資料庫 (覆蓋舊值)
         update_status_value("Last_Market_Val", total_val)
-        st.success(f"已更新市值：${total_val:,.0f} 並存入雲端快照")
-        # 這裡不 reruan，讓使用者看到結果
+        
+        st.success(f"已更新市值：${total_val:,.0f} (同步至雲端)")
 
-    # 顯示結果 (優先顯示 Session 中的值，這樣切換頁面回來數值不會跑掉)
     display_val = st.session_state['total_market_val']
     
     st.divider()
-    st.metric("擔保品總市值 (Snapshot)", f"${display_val:,.0f}")
+    st.metric("擔保品總市值", f"${display_val:,.0f}")
     
     if loan_input > 0:
         m_ratio = (display_val / loan_input) * 100
@@ -243,7 +254,7 @@ with tab3:
         st.success("已更新")
         st.rerun()
 
-# === E. 資產績效 (穩定版) ===
+# === E. 資產績效 (讀取端) ===
 with tab4:
     st.header("📈 資產績效總覽")
     col_main1, col_main2 = st.columns([1, 2])
@@ -262,19 +273,25 @@ with tab4:
 
     with col_main2:
         st.subheader("📊 績效計算")
+        
+        # 新增一個強制從雲端拉資料的按鈕，讓你有安全感
+        if st.button("🔄 強制從雲端讀取最新數值"):
+            # 強制去抓 Status 裡的 Last_Market_Val
+            val = get_status_value("Last_Market_Val")
+            st.session_state['total_market_val'] = val
+            st.rerun()
+
         with st.container(border=True):
-            # 讀取空閒資金 (從 Status)
             cash_val = get_status_value("Idle_Cash")
             
-            # 讀取股票市值 (從 Session -> 如果 Session 空則從 Status 讀)
-            # 這裡就是 "穩定" 的關鍵：它不會自己去算，而是讀取 Tab 2 算好存起來的值
+            # 這裡只讀取，不計算
             stock_val = st.session_state['total_market_val']
             
             c1, c2 = st.columns(2)
             c1.markdown(f"**1. 股票現值 (Read Only)**")
             c1.info(f"${stock_val:,.0f}")
             if stock_val == 0:
-                c1.warning("⚠️ 數值為 0，請至 Tab 2 按下「更新股價」")
+                c1.warning("⚠️ 無數值，請至 Tab 2 計算或按上方強制讀取")
 
             new_cash = c2.number_input("2. 空閒資金", value=cash_val, step=1000.0)
             if new_cash != cash_val:
