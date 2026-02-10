@@ -151,7 +151,7 @@ with tab1:
             st.error("⚠️ **主動防禦 (CNN ≦ 0.62)**：減碼總本金 10%或清空質押部位。")
             signal_triggered = True
         elif cboe_val <= 0.50:
-            st.warning("⚠️ **戰術調整 (CBOE ≦ 0.50)**：減碼市值 5%或質押部位10%。")
+            st.warning("⚠️ **戰術調整 (CBOE ≦ 0.55)**：減碼市值 5%或質押部位10%。")
             signal_triggered = True
         if not signal_triggered:
             st.info("✅ 發呆續抱")
@@ -298,3 +298,4 @@ with tab4:
             r2.metric("未實現損益", f"${profit_loss:,.0f}")
             r3.metric("ROI", f"{roi:.2f}%", delta=profit_loss)
             st.progress(min(max((roi + 50) / 100, 0.0), 1.0))
+
